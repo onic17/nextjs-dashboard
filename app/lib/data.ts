@@ -8,29 +8,78 @@ import {
   Revenue,
 } from './definitions';
 import { formatCurrency } from './utils';
+import {
+  customers as placeholderCustomers,
+  invoices as placeholderInvoices,
+  revenue as placeholderRevenue,
+} from './placeholder-data';
 
-const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' });
+const connectionString = process.env.POSTGRES_URL;
+const sql = connectionString
+  ? postgres(connectionString, { ssl: 'require' })
+  : null;
+
+function getSqlClient() {
+  if (!sql) {
+    throw new Error(
+      'Database connection is not configured. Set POSTGRES_URL in your environment to connect.',
+    );
+  }
+  return sql;
+}
 
 export async function fetchRevenue() {
+  if (!sql) {
+    console.warn(
+      'POSTGRES_URL not set. Falling back to placeholder revenue data.',
+    );
+    return placeholderRevenue;
+  }
   try {
     // Artificially delay a response for demo purposes.
     // Don't do this in production :)
-
-    // console.log('Fetching revenue data...');
-    // await new Promise((resolve) => setTimeout(resolve, 3000));
+    console.log('Fetching revenue data...');
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
     const data = await sql<Revenue[]>`SELECT * FROM revenue`;
 
-    // console.log('Data fetch completed after 3 seconds.');
+    console.log('Data fetch completed after 3 seconds.');
 
     return data;
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch revenue data.');
+    return placeholderRevenue;
   }
 }
 
 export async function fetchLatestInvoices() {
+  if (!sql) {
+    console.warn(
+      'POSTGRES_URL not set. Falling back to placeholder invoice data.',
+    );
+    const latestInvoices = placeholderInvoices
+      .map((invoice) => {
+        const customer = placeholderCustomers.find(
+          (c) => c.id === invoice.customer_id,
+        );
+
+        return {
+          id: `placeholder-${invoice.customer_id}-${invoice.date}`,
+          ...invoice,
+          name: customer?.name ?? 'Unknown',
+          email: customer?.email ?? '',
+          image_url: customer?.image_url ?? '',
+          amount: formatCurrency(invoice.amount),
+        };
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.date).getTime() - new Date(a.date).getTime(),
+      )
+      .slice(0, 5);
+
+    return latestInvoices;
+  }
   try {
     const data = await sql<LatestInvoiceRaw[]>`
       SELECT invoices.amount, customers.name, customers.image_url, customers.email, invoices.id
@@ -46,11 +95,50 @@ export async function fetchLatestInvoices() {
     return latestInvoices;
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch the latest invoices.');
+    const latestInvoices = placeholderInvoices
+      .map((invoice) => {
+        const customer = placeholderCustomers.find(
+          (c) => c.id === invoice.customer_id,
+        );
+
+        return {
+          id: `placeholder-${invoice.customer_id}-${invoice.date}`,
+          ...invoice,
+          name: customer?.name ?? 'Unknown',
+          email: customer?.email ?? '',
+          image_url: customer?.image_url ?? '',
+          amount: formatCurrency(invoice.amount),
+        };
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.date).getTime() - new Date(a.date).getTime(),
+      )
+      .slice(0, 5);
+
+    return latestInvoices;
   }
 }
 
 export async function fetchCardData() {
+  if (!sql) {
+    console.warn(
+      'POSTGRES_URL not set. Falling back to placeholder card data.',
+    );
+    const paid = placeholderInvoices
+      .filter((invoice) => invoice.status === 'paid')
+      .reduce((sum, invoice) => sum + invoice.amount, 0);
+    const pending = placeholderInvoices
+      .filter((invoice) => invoice.status === 'pending')
+      .reduce((sum, invoice) => sum + invoice.amount, 0);
+
+    return {
+      numberOfCustomers: placeholderCustomers.length,
+      numberOfInvoices: placeholderInvoices.length,
+      totalPaidInvoices: formatCurrency(paid),
+      totalPendingInvoices: formatCurrency(pending),
+    };
+  }
   try {
     // You can probably combine these into a single SQL query
     // However, we are intentionally splitting them to demonstrate
@@ -81,7 +169,19 @@ export async function fetchCardData() {
     };
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch card data.');
+    const paid = placeholderInvoices
+      .filter((invoice) => invoice.status === 'paid')
+      .reduce((sum, invoice) => sum + invoice.amount, 0);
+    const pending = placeholderInvoices
+      .filter((invoice) => invoice.status === 'pending')
+      .reduce((sum, invoice) => sum + invoice.amount, 0);
+
+    return {
+      numberOfCustomers: placeholderCustomers.length,
+      numberOfInvoices: placeholderInvoices.length,
+      totalPaidInvoices: formatCurrency(paid),
+      totalPendingInvoices: formatCurrency(pending),
+    };
   }
 }
 
@@ -90,10 +190,11 @@ export async function fetchFilteredInvoices(
   query: string,
   currentPage: number,
 ) {
+  const client = getSqlClient();
   const offset = (currentPage - 1) * ITEMS_PER_PAGE;
 
   try {
-    const invoices = await sql<InvoicesTable[]>`
+    const invoices = await client<InvoicesTable[]>`
       SELECT
         invoices.id,
         invoices.amount,
@@ -122,8 +223,9 @@ export async function fetchFilteredInvoices(
 }
 
 export async function fetchInvoicesPages(query: string) {
+  const client = getSqlClient();
   try {
-    const data = await sql`SELECT COUNT(*)
+    const data = await client`SELECT COUNT(*)
     FROM invoices
     JOIN customers ON invoices.customer_id = customers.id
     WHERE
@@ -143,8 +245,9 @@ export async function fetchInvoicesPages(query: string) {
 }
 
 export async function fetchInvoiceById(id: string) {
+  const client = getSqlClient();
   try {
-    const data = await sql<InvoiceForm[]>`
+    const data = await client<InvoiceForm[]>`
       SELECT
         invoices.id,
         invoices.customer_id,
@@ -168,8 +271,9 @@ export async function fetchInvoiceById(id: string) {
 }
 
 export async function fetchCustomers() {
+  const client = getSqlClient();
   try {
-    const customers = await sql<CustomerField[]>`
+    const customers = await client<CustomerField[]>`
       SELECT
         id,
         name
@@ -185,8 +289,9 @@ export async function fetchCustomers() {
 }
 
 export async function fetchFilteredCustomers(query: string) {
+  const client = getSqlClient();
   try {
-    const data = await sql<CustomersTableType[]>`
+    const data = await client<CustomersTableType[]>`
 		SELECT
 		  customers.id,
 		  customers.name,
